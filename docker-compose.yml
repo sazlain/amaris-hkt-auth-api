@@ -1,0 +1,82 @@
+services:
+  # Base de datos PostgreSQL (ya existente)
+  postgres:
+    image: postgres:16-alpine
+    container_name: ${POSTGRES_CONTAINER_NAME}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - auth_network
+
+  # API de Autenticación (Java/Spring Boot)
+  auth-api:
+    image: eclipse-temurin:17-jre-alpine
+    platform: linux/amd64
+    container_name: ${API_CONTAINER_NAME}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Conexión a PostgreSQL
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
+
+      # Configuración JPA/Hibernate
+      SPRING_JPA_HIBERNATE_DDL_AUTO: ${JPA_DDL_AUTO:-update}
+      SPRING_JPA_SHOW_SQL: ${JPA_SHOW_SQL:-false}
+      SPRING_JPA_DATABASE_PLATFORM: org.hibernate.dialect.PostgreSQLDialect
+      LOG_DIR: ${LOG_DIR}
+      # Configuración del servidor
+      SERVER_PORT: 8080
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILE:-docker}
+
+      # Zona horaria
+      TZ: America/Bogota
+
+      # Configuración JVM
+      JAVA_OPTS: ${JAVA_OPTS:--Xms256m -Xmx512m -XX:+UseG1GC}
+    ports:
+      - "${API_PORT:-8080}:8080"
+    volumes:
+      # Monta tu JAR compilado (ajusta el nombre según tu archivo)
+      - ${PATH_TO_JAR_FILE}:/app/auth-api-1.0.0.jar
+      # Carpeta de logs (opcional)
+      - ${LOG_DIR}:/app/logs
+    working_dir: /app
+    command: sh -c "java $${JAVA_OPTS} -jar /app/auth-api-1.0.0.jar"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8080/swagger-ui/index.html  || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    networks:
+      - auth_network
+
+volumes:
+  postgres_data:
+  auth_logs:
+
+networks:
+  auth_network:
+    driver: bridge
